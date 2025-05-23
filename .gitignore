@@ -1,0 +1,20 @@
+# Virtual Environment directories
+venv/
+venv2/
+__pycache__/
+*.pyc
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Environment variables
+.env
+
+# Logs
+*.log 
