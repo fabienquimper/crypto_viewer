@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from income_gains import IncomeGainsViewer
+from realized_gains import RealizedGainsViewer
 
 class CryptoBinanceViewer:
     def __init__(self, root):
@@ -47,7 +48,6 @@ class CryptoBinanceViewer:
         # Onglet Realized Capital Gains
         self.capital_gains_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.capital_gains_tab, text="Realized Capital Gains")
-        self.setup_capital_gains_tab()
 
         # Onglet Income Gains
         self.income_gains_tab = ttk.Frame(self.notebook)
@@ -64,8 +64,9 @@ class CryptoBinanceViewer:
         self.summary = tk.Text(summary_frame, height=6, wrap=tk.WORD)
         self.summary.pack(fill=tk.BOTH, expand=True)
 
-        # Initialiser l'onglet Income Gains après avoir créé le résumé
+        # Initialiser les onglets après avoir créé le résumé
         self.income_gains_viewer = IncomeGainsViewer(self.income_gains_tab, self.summary)
+        self.realized_gains_viewer = RealizedGainsViewer(self.capital_gains_tab, self.summary)
 
     def setup_transactions_tab(self):
         """Configure l'onglet Transactions"""
