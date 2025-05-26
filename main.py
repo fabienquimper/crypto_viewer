@@ -73,9 +73,6 @@ class CryptoBinanceViewer:
         # Boutons de la barre d'outils
         btn_load = ttk.Button(toolbar, text="📂 Ouvrir", command=self.load_csv)
         btn_load.pack(side=tk.LEFT, padx=2)
-        
-        btn_refresh = ttk.Button(toolbar, text="🔄 Actualiser", command=self.refresh_files)
-        btn_refresh.pack(side=tk.LEFT, padx=2)
 
         # Chemin actuel
         self.path_var = tk.StringVar(value=self.current_directory)
@@ -95,28 +92,31 @@ class CryptoBinanceViewer:
         paned = ttk.PanedWindow(self.transactions_tab, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
 
-        # Panneau de gauche (explorateur de fichiers)
-        left_frame = ttk.Frame(paned)
+        # Panneau de gauche (liste des fichiers chargés)
+        left_frame = ttk.LabelFrame(paned, text="Fichiers chargés", padding="5")
         paned.add(left_frame, weight=1)
 
-        # Arborescence des fichiers
-        self.tree = ttk.Treeview(left_frame, selectmode='browse')
-        self.tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        # Frame pour les boutons de la liste
+        list_buttons = ttk.Frame(left_frame)
+        list_buttons.pack(fill=tk.X, pady=(0, 5))
         
-        # Scrollbar pour l'arborescence
-        tree_scroll = ttk.Scrollbar(left_frame, orient="vertical", command=self.tree.yview)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.configure(yscrollcommand=tree_scroll.set)
+        btn_select_all = ttk.Button(list_buttons, text="✓ Tout sélectionner", command=self.select_all_files)
+        btn_select_all.pack(side=tk.LEFT, padx=2)
+        
+        btn_deselect_all = ttk.Button(list_buttons, text="✗ Tout désélectionner", command=self.deselect_all_files)
+        btn_deselect_all.pack(side=tk.LEFT, padx=2)
 
-        # Configuration de l'arborescence
-        self.tree["columns"] = ("size", "type")
-        self.tree.column("#0", width=200, minwidth=100)
-        self.tree.column("size", width=100, minwidth=50)
-        self.tree.column("type", width=100, minwidth=50)
+        # Liste des fichiers avec cases à cocher
+        self.files_listbox = tk.Listbox(left_frame, selectmode=tk.EXTENDED)
+        self.files_listbox.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
         
-        self.tree.heading("#0", text="Nom")
-        self.tree.heading("size", text="Taille")
-        self.tree.heading("type", text="Type")
+        # Scrollbar pour la liste
+        list_scroll = ttk.Scrollbar(left_frame, orient="vertical", command=self.files_listbox.yview)
+        list_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.files_listbox.configure(yscrollcommand=list_scroll.set)
+
+        # Dictionnaire pour stocker les variables des cases à cocher
+        self.file_checkboxes = {}
 
         # Panneau de droite (filtres)
         right_frame = ttk.Frame(paned)
@@ -147,10 +147,6 @@ class CryptoBinanceViewer:
 
         validate_btn = ttk.Button(filters_buttons_frame, text="✓ Valider unicité", command=self.validate_transaction_uniqueness)
         validate_btn.pack(side=tk.LEFT, padx=5)
-
-        # Configuration des événements
-        self.tree.bind('<Double-1>', self.on_file_double_click)
-        self.populate_tree()
 
     def setup_capital_gains_tab(self):
         """Configure l'onglet Realized Capital Gains"""
@@ -426,15 +422,8 @@ class CryptoBinanceViewer:
         new_path = self.path_var.get()
         if os.path.isdir(new_path):
             self.current_directory = new_path
-            self.populate_tree()
         else:
             messagebox.showerror("Erreur", "Chemin invalide")
-
-    def refresh_files(self):
-        """Rafraîchit l'affichage des fichiers"""
-        self.populate_tree()
-        self.populate_filters()
-        self.update_summary()
 
     def load_single_file(self, filepath):
         """Charge un seul fichier CSV"""
@@ -444,6 +433,10 @@ class CryptoBinanceViewer:
                 df = pd.read_csv(filepath, decimal=decimal)
                 name = os.path.basename(filepath)
                 self.dataframes[name] = df
+                
+                # Ajouter le fichier à la liste avec une case à cocher
+                self.create_checkbox(self.files_listbox, name)
+                
                 self.populate_filters()
                 self.update_summary()
             except Exception as e:
@@ -483,6 +476,28 @@ class CryptoBinanceViewer:
                 size = f"{item.stat().st_size / 1024:.1f} KB"
                 self.tree.insert("", "end", text=item.name, values=(size, "CSV"), tags=("file",))
 
+    def select_all_files(self):
+        """Sélectionne tous les fichiers dans la liste"""
+        for filename in self.dataframes.keys():
+            if filename in self.file_checkboxes:
+                self.file_checkboxes[filename].set(True)
+        self.update_summary()
+
+    def deselect_all_files(self):
+        """Désélectionne tous les fichiers dans la liste"""
+        for filename in self.dataframes.keys():
+            if filename in self.file_checkboxes:
+                self.file_checkboxes[filename].set(False)
+        self.update_summary()
+
+    def get_active_dataframes(self):
+        """Retourne uniquement les dataframes des fichiers sélectionnés"""
+        active_dfs = {}
+        for filename, var in self.file_checkboxes.items():
+            if var.get() and filename in self.dataframes:
+                active_dfs[filename] = self.dataframes[filename]
+        return active_dfs
+
     def calculate_eur_totals(self):
         """Calcule les totaux des transactions en EUR"""
         if not self.dataframes:
@@ -490,8 +505,8 @@ class CryptoBinanceViewer:
             return
 
         try:
-            # Concaténer tous les dataframes
-            all_data = pd.concat(self.dataframes.values(), ignore_index=True)
+            # Concaténer uniquement les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
             
             # Convertir les colonnes numériques en float
             numeric_columns = ['Sent Amount', 'Received Amount']
@@ -587,6 +602,24 @@ class CryptoBinanceViewer:
             
         except Exception as e:
             messagebox.showerror("Erreur d'export", f"Une erreur est survenue lors de l'export des transactions EUR :\n{str(e)}")
+
+    def create_checkbox(self, parent, filename):
+        """Crée une case à cocher pour un fichier"""
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.X, padx=5, pady=2)
+        
+        var = tk.BooleanVar(value=True)
+        self.file_checkboxes[filename] = var
+        
+        cb = ttk.Checkbutton(frame, text=filename, variable=var, 
+                            command=self.on_file_selection_change)
+        cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        return frame
+
+    def on_file_selection_change(self):
+        """Appelé quand la sélection des fichiers change"""
+        self.update_summary()
 
 if __name__ == "__main__":
     root = tk.Tk()
