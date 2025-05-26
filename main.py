@@ -80,13 +80,22 @@ class CryptoBinanceViewer:
         path_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         path_entry.bind('<Return>', self.change_directory)
 
-        # Bouton de calcul EUR
+        # Boutons de calcul
         btn_calc_eur = ttk.Button(toolbar, text="💰 Calculate all EUR spend", command=self.calculate_eur_totals)
         btn_calc_eur.pack(side=tk.LEFT, padx=5)
 
-        # Bouton d'export EUR
+        btn_calc_reward = ttk.Button(toolbar, text="🎁 Calculate Reward", command=self.calculate_rewards)
+        btn_calc_reward.pack(side=tk.LEFT, padx=5)
+
+        btn_calc_tax = ttk.Button(toolbar, text="📊 Calculate Tax", command=self.calculate_tax)
+        btn_calc_tax.pack(side=tk.LEFT, padx=5)
+
+        # Boutons d'export
         btn_export_eur = ttk.Button(toolbar, text="📤 Export EUR transactions", command=self.export_eur_transactions)
         btn_export_eur.pack(side=tk.RIGHT, padx=5)
+
+        btn_export_reward = ttk.Button(toolbar, text="📤 Export Reward transactions", command=self.export_reward_transactions)
+        btn_export_reward.pack(side=tk.RIGHT, padx=5)
 
         # Section principale avec panneau divisé
         paned = ttk.PanedWindow(self.transactions_tab, orient=tk.HORIZONTAL)
@@ -531,17 +540,16 @@ class CryptoBinanceViewer:
             all_EUR_to_binance_REAL = all_EUR_sent + all_EUR_deposit - all_EUR_Sell
 
             # Afficher les résultats dans le résumé
-            self.summary.delete("1.0", tk.END)
-            self.summary.insert(tk.END, "=== EUR Spending Analysis ===\n\n")
-            self.summary.insert(tk.END, f"EUR spent on Buy orders: {all_EUR_sent:.2f} EUR\n")
-            self.summary.insert(tk.END, f"EUR received from Deposits: {all_EUR_deposit:.2f} EUR\n")
-            self.summary.insert(tk.END, f"EUR received from Sells: {all_EUR_Sell:.2f} EUR\n")
-            self.summary.insert(tk.END, f"Total EUR to Binance: {all_EUR_to_binance:.2f} EUR\n")
-            self.summary.insert(tk.END, f"Real EUR to Binance (minus sells): {all_EUR_to_binance_REAL:.2f} EUR\n\n")
+            self.append_to_summary("\n=== EUR Spending Analysis ===\n\n")
+            self.append_to_summary(f"EUR spent on Buy orders: {all_EUR_sent:.2f} EUR\n")
+            self.append_to_summary(f"EUR received from Deposits: {all_EUR_deposit:.2f} EUR\n")
+            self.append_to_summary(f"EUR received from Sells: {all_EUR_Sell:.2f} EUR\n")
+            self.append_to_summary(f"Total EUR to Binance: {all_EUR_to_binance:.2f} EUR\n")
+            self.append_to_summary(f"Real EUR to Binance (minus sells): {all_EUR_to_binance_REAL:.2f} EUR\n\n")
 
             # Calculer et afficher les totaux par année
             if 'Year' in all_data.columns:
-                self.summary.insert(tk.END, "=== Yearly Analysis ===\n\n")
+                self.append_to_summary("=== Yearly Analysis ===\n\n")
                 for year in sorted(all_data['Year'].unique()):
                     if pd.isna(year):
                         continue
@@ -554,12 +562,12 @@ class CryptoBinanceViewer:
                     year_total = year_buy + year_deposit
                     year_real = year_buy + year_deposit - year_sell
 
-                    self.summary.insert(tk.END, f"=== {int(year)} ===\n")
-                    self.summary.insert(tk.END, f"EUR spent on Buy orders: {year_buy:.2f} EUR\n")
-                    self.summary.insert(tk.END, f"EUR received from Deposits: {year_deposit:.2f} EUR\n")
-                    self.summary.insert(tk.END, f"EUR received from Sells: {year_sell:.2f} EUR\n")
-                    self.summary.insert(tk.END, f"Total EUR to Binance: {year_total:.2f} EUR\n")
-                    self.summary.insert(tk.END, f"Real EUR to Binance (minus sells): {year_real:.2f} EUR\n\n")
+                    self.append_to_summary(f"=== {int(year)} ===\n")
+                    self.append_to_summary(f"EUR spent on Buy orders: {year_buy:.2f} EUR\n")
+                    self.append_to_summary(f"EUR received from Deposits: {year_deposit:.2f} EUR\n")
+                    self.append_to_summary(f"EUR received from Sells: {year_sell:.2f} EUR\n")
+                    self.append_to_summary(f"Total EUR to Binance: {year_total:.2f} EUR\n")
+                    self.append_to_summary(f"Real EUR to Binance (minus sells): {year_real:.2f} EUR\n\n")
 
         except Exception as e:
             messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des totaux EUR :\n{str(e)}")
@@ -571,8 +579,8 @@ class CryptoBinanceViewer:
             return
 
         try:
-            # Concaténer tous les dataframes
-            all_data = pd.concat(self.dataframes.values(), ignore_index=True)
+            # Concaténer uniquement les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
             
             # Filtrer les transactions EUR
             eur_mask = (
@@ -585,6 +593,12 @@ class CryptoBinanceViewer:
             if eur_transactions.empty:
                 messagebox.showwarning("Export EUR", "Aucune transaction EUR trouvée.")
                 return
+
+            # Convertir la colonne Date en datetime si elle existe
+            if 'Date' in eur_transactions.columns:
+                eur_transactions['Date'] = pd.to_datetime(eur_transactions['Date'], errors='coerce')
+                # Trier par date
+                eur_transactions = eur_transactions.sort_values('Date')
 
             # Demander où sauvegarder le fichier
             filepath = filedialog.asksaveasfilename(
@@ -619,7 +633,110 @@ class CryptoBinanceViewer:
 
     def on_file_selection_change(self):
         """Appelé quand la sélection des fichiers change"""
+        # Effacer le résumé lors du changement de sélection des fichiers
+        self.summary.delete("1.0", tk.END)
         self.update_summary()
+
+    def calculate_rewards(self):
+        """Calcule les récompenses par devise et par année"""
+        if not self.dataframes:
+            messagebox.showwarning("Calcul des récompenses", "Aucune donnée à analyser. Veuillez d'abord charger des fichiers CSV.")
+            return
+
+        try:
+            # Concaténer uniquement les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            
+            # Convertir les colonnes numériques en float
+            if 'Received Amount' in all_data.columns:
+                all_data['Received Amount'] = pd.to_numeric(all_data['Received Amount'], errors='coerce').fillna(0)
+            
+            # Convertir la colonne Date en datetime si elle existe
+            if 'Date' in all_data.columns:
+                all_data['Date'] = pd.to_datetime(all_data['Date'], errors='coerce')
+                all_data['Year'] = all_data['Date'].dt.year
+
+            # Filtrer les transactions de type "Receive" avec label "Reward"
+            reward_mask = (all_data['Type'] == 'Receive') & (all_data['Label'] == 'Reward')
+            reward_data = all_data[reward_mask]
+
+            if reward_data.empty:
+                self.append_to_summary("Aucune récompense trouvée dans les données.")
+                return
+
+            # Calculer les totaux globaux par devise
+            self.append_to_summary("\n=== Récompenses Globales ===\n")
+            rewards_by_currency = reward_data.groupby('Received Currency')['Received Amount'].sum()
+            for currency, amount in rewards_by_currency.items():
+                self.append_to_summary(f"{currency}: {amount:.8f}\n")
+
+            # Calculer les totaux par année
+            if 'Year' in reward_data.columns:
+                self.append_to_summary("\n=== Récompenses par Année ===\n")
+                for year in sorted(reward_data['Year'].unique()):
+                    if pd.isna(year):
+                        continue
+                    
+                    year_data = reward_data[reward_data['Year'] == year]
+                    year_rewards = year_data.groupby('Received Currency')['Received Amount'].sum()
+                    
+                    self.append_to_summary(f"\n=== {int(year)} ===\n")
+                    for currency, amount in year_rewards.items():
+                        self.append_to_summary(f"{currency}: {amount:.8f}\n")
+
+        except Exception as e:
+            messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des récompenses :\n{str(e)}")
+
+    def calculate_tax(self):
+        """Calcule les taxes (à implémenter)"""
+        self.append_to_summary("\n=== Calcul des Taxes ===\n")
+        self.append_to_summary("Cette fonctionnalité sera implémentée prochainement.\n")
+
+    def append_to_summary(self, text):
+        """Ajoute du texte à la zone de résumé sans effacer le contenu existant"""
+        self.summary.insert(tk.END, text)
+        self.summary.see(tk.END)  # Faire défiler jusqu'à la fin
+
+    def export_reward_transactions(self):
+        """Exporte les transactions de récompenses vers un fichier CSV"""
+        if not self.dataframes:
+            messagebox.showwarning("Export Reward", "Aucune donnée à exporter. Veuillez d'abord charger des fichiers CSV.")
+            return
+
+        try:
+            # Concaténer uniquement les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            
+            # Filtrer les transactions de type "Receive" avec label "Reward"
+            reward_mask = (all_data['Type'] == 'Receive') & (all_data['Label'] == 'Reward')
+            reward_transactions = all_data[reward_mask]
+
+            if reward_transactions.empty:
+                messagebox.showwarning("Export Reward", "Aucune transaction de récompense trouvée.")
+                return
+
+            # Convertir la colonne Date en datetime si elle existe
+            if 'Date' in reward_transactions.columns:
+                reward_transactions['Date'] = pd.to_datetime(reward_transactions['Date'], errors='coerce')
+                # Trier par date
+                reward_transactions = reward_transactions.sort_values('Date')
+
+            # Demander où sauvegarder le fichier
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Exporter les transactions de récompenses"
+            )
+            
+            if not filepath:  # L'utilisateur a annulé
+                return
+
+            # Exporter vers CSV
+            reward_transactions.to_csv(filepath, index=False)
+            messagebox.showinfo("Export Reward", f"Transactions de récompenses exportées avec succès vers :\n{filepath}")
+            
+        except Exception as e:
+            messagebox.showerror("Erreur d'export", f"Une erreur est survenue lors de l'export des transactions de récompenses :\n{str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
