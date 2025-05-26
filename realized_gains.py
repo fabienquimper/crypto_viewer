@@ -222,7 +222,7 @@ class RealizedGainsViewer:
         return active_dfs
 
     def calculate_realized_gains(self):
-        """Calcule les gains réalisés totaux et par année"""
+        """Calcule les gains réalisés totaux et par année (année basée sur 'Sold')"""
         if not self.dataframes:
             messagebox.showwarning("Calcul des gains", "Aucune donnée à analyser. Veuillez d'abord charger des fichiers CSV.")
             return
@@ -234,7 +234,9 @@ class RealizedGainsViewer:
             # Convertir les colonnes de dates
             if 'Acquired' in all_data.columns:
                 all_data['Acquired'] = pd.to_datetime(all_data['Acquired'], errors='coerce')
-                all_data['Year'] = all_data['Acquired'].dt.year
+            if 'Sold' in all_data.columns:
+                all_data['Sold'] = pd.to_datetime(all_data['Sold'], errors='coerce')
+                all_data['Year'] = all_data['Sold'].dt.year
 
             # Convertir les colonnes numériques
             numeric_columns = ['Currency amount', 'Proceeds (EUR)', 'Cost basis (EUR)', 'Gains (EUR)', 'Holding period (Days)']
@@ -271,14 +273,11 @@ class RealizedGainsViewer:
             self.summary.insert(tk.END, f"Total Cost Basis: {total_cost_basis:.2f} EUR\n")
             self.summary.insert(tk.END, f"Total Gains: {total_gains:.2f} EUR\n")
 
-            # Calculer les totaux par année
+            # Calculer les totaux par année (année basée sur 'Sold')
             if 'Year' in all_data.columns:
-                self.summary.insert(tk.END, "\n=== Gains par Année ===\n\n")
+                self.summary.insert(tk.END, "\n=== Gains par Année (année de cession) ===\n\n")
                 
-                for year in sorted(all_data['Year'].unique()):
-                    if pd.isna(year):
-                        continue
-                    
+                for year in sorted(all_data['Year'].dropna().unique()):
                     year_data = all_data[all_data['Year'] == year]
                     
                     # Calculer les totaux par devise pour cette année
