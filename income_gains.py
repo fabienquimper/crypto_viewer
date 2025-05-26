@@ -29,6 +29,14 @@ class IncomeGainsViewer:
         path_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         path_entry.bind('<Return>', self.change_directory)
 
+        # Bouton de calcul des gains
+        btn_calculate = ttk.Button(toolbar, text="Calculate Income Gains", command=self.calculate_income_gains)
+        btn_calculate.pack(side=tk.LEFT, padx=5)
+
+        # Bouton d'export des gains
+        btn_export = ttk.Button(toolbar, text="📤 Export Income Gain CSV", command=self.export_income_gains)
+        btn_export.pack(side=tk.LEFT, padx=5)
+
         # Section principale avec panneau divisé
         paned = ttk.PanedWindow(self.parent_frame, orient=tk.HORIZONTAL)
         paned.pack(fill=tk.BOTH, expand=True)
@@ -279,4 +287,106 @@ class IncomeGainsViewer:
         for filename in self.dataframes.keys():
             if filename in self.file_checkboxes:
                 self.file_checkboxes[filename].set(False)
-        self.update_summary() 
+        self.update_summary()
+
+    def calculate_income_gains(self):
+        """Calcule les gains totaux et par année"""
+        if not self.dataframes:
+            messagebox.showwarning("Calcul des gains", "Aucune donnée à analyser. Veuillez d'abord charger des fichiers CSV.")
+            return
+
+        try:
+            # Concaténer uniquement les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            
+            # Convertir la colonne Date en datetime si elle existe
+            if 'Date' in all_data.columns:
+                all_data['Date'] = pd.to_datetime(all_data['Date'], errors='coerce')
+                all_data['Year'] = all_data['Date'].dt.year
+
+            # Convertir les colonnes numériques
+            if 'Amount' in all_data.columns:
+                all_data['Amount'] = pd.to_numeric(all_data['Amount'], errors='coerce')
+            if 'Value (EUR)' in all_data.columns:
+                all_data['Value (EUR)'] = pd.to_numeric(all_data['Value (EUR)'], errors='coerce')
+
+            # Calculer les totaux globaux par devise
+            self.summary.delete("1.0", tk.END)
+            self.summary.insert(tk.END, "=== Gains Globaux ===\n\n")
+
+            # Calculer les totaux par devise
+            gains_by_asset = all_data.groupby('Asset').agg({
+                'Amount': 'sum',
+                'Value (EUR)': 'sum'
+            }).round(8)
+
+            for asset, row in gains_by_asset.iterrows():
+                self.summary.insert(tk.END, f"{asset}: {row['Amount']:.8f} (Valeur: {row['Value (EUR)']:.2f} EUR)\n")
+
+            # Calculer le total en EUR
+            total_eur = all_data['Value (EUR)'].sum()
+            self.summary.insert(tk.END, f"\nTotal Value (EUR): {total_eur:.2f} EUR\n")
+
+            # Calculer les totaux par année
+            if 'Year' in all_data.columns:
+                self.summary.insert(tk.END, "\n=== Gains par Année ===\n\n")
+                
+                for year in sorted(all_data['Year'].unique()):
+                    if pd.isna(year):
+                        continue
+                    
+                    year_data = all_data[all_data['Year'] == year]
+                    
+                    # Calculer les totaux par devise pour cette année
+                    year_gains = year_data.groupby('Asset').agg({
+                        'Amount': 'sum',
+                        'Value (EUR)': 'sum'
+                    }).round(8)
+                    
+                    self.summary.insert(tk.END, f"\n=== {int(year)} ===\n")
+                    
+                    # Afficher les gains par devise pour cette année
+                    for asset, row in year_gains.iterrows():
+                        self.summary.insert(tk.END, f"{asset}: {row['Amount']:.8f} (Valeur: {row['Value (EUR)']:.2f} EUR)\n")
+                    
+                    # Afficher le total en EUR pour cette année
+                    year_total_eur = year_data['Value (EUR)'].sum()
+                    self.summary.insert(tk.END, f"Total Value (EUR): {year_total_eur:.2f} EUR\n")
+
+        except Exception as e:
+            messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des gains :\n{str(e)}")
+
+    def export_income_gains(self):
+        """Exporte les données de gains vers un fichier CSV trié par date"""
+        if not self.dataframes:
+            messagebox.showwarning("Export", "Aucune donnée à exporter. Veuillez d'abord charger des fichiers CSV.")
+            return
+
+        try:
+            # Demander à l'utilisateur où sauvegarder le fichier
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv")],
+                title="Exporter les gains"
+            )
+            
+            if not filepath:  # L'utilisateur a annulé
+                return
+
+            # Concaténer tous les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            
+            # Convertir la colonne Date en datetime si elle existe
+            if 'Date' in all_data.columns:
+                all_data['Date'] = pd.to_datetime(all_data['Date'], errors='coerce')
+                # Trier par date
+                all_data = all_data.sort_values('Date')
+                # Reconvertir en format string pour l'export
+                all_data['Date'] = all_data['Date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+            # Exporter vers CSV
+            all_data.to_csv(filepath, index=False)
+            messagebox.showinfo("Export", f"Données exportées avec succès vers :\n{filepath}")
+            
+        except Exception as e:
+            messagebox.showerror("Erreur d'export", f"Une erreur est survenue lors de l'export :\n{str(e)}") 
