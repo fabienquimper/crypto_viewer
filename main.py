@@ -3,6 +3,7 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from income_gains import IncomeGainsViewer
 
 class CryptoBinanceViewer:
     def __init__(self, root):
@@ -51,7 +52,6 @@ class CryptoBinanceViewer:
         # Onglet Income Gains
         self.income_gains_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.income_gains_tab, text="Income Gains")
-        self.setup_income_gains_tab()
 
         # Séparateur redimensionnable
         separator = ttk.Separator(main_frame, orient='horizontal')
@@ -63,6 +63,9 @@ class CryptoBinanceViewer:
 
         self.summary = tk.Text(summary_frame, height=6, wrap=tk.WORD)
         self.summary.pack(fill=tk.BOTH, expand=True)
+
+        # Initialiser l'onglet Income Gains après avoir créé le résumé
+        self.income_gains_viewer = IncomeGainsViewer(self.income_gains_tab, self.summary)
 
     def setup_transactions_tab(self):
         """Configure l'onglet Transactions"""
