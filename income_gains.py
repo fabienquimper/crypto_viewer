@@ -3,6 +3,7 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from update_csv import CSVTableViewer
 
 class IncomeGainsViewer:
     def __init__(self, parent_frame, summary_widget):
@@ -97,6 +98,8 @@ class IncomeGainsViewer:
         # Séparateur
         separator = ttk.Separator(self.parent_frame, orient='horizontal')
         separator.pack(fill=tk.X, pady=5)
+
+        self.files_listbox.bind('<Double-1>', self.open_selected_csv)
 
     def create_multiselect(self, parent, label):
         frame = ttk.Frame(parent)
@@ -389,4 +392,17 @@ class IncomeGainsViewer:
             messagebox.showinfo("Export", f"Données exportées avec succès vers :\n{filepath}")
             
         except Exception as e:
-            messagebox.showerror("Erreur d'export", f"Une erreur est survenue lors de l'export :\n{str(e)}") 
+            messagebox.showerror("Erreur d'export", f"Une erreur est survenue lors de l'export :\n{str(e)}")
+
+    def open_selected_csv(self, event=None):
+        selection = self.files_listbox.curselection()
+        if not selection:
+            return
+        filename = self.files_listbox.get(selection[0])
+        for path in self.dataframes:
+            if os.path.basename(path) == filename or path == filename:
+                try:
+                    CSVTableViewer(self.parent_frame, path, title=f"Aperçu CSV : {filename}")
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Impossible d'ouvrir le fichier : {e}")
+                break 

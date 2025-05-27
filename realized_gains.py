@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from realized_gains_graph import show_graph_window
+from update_csv import CSVTableViewer
 
 class RealizedGainsViewer:
     def __init__(self, parent_frame, summary_widget):
@@ -98,6 +99,8 @@ class RealizedGainsViewer:
         
         reset_filter_btn = ttk.Button(filters_buttons_frame, text="Reset", command=self.reset_filters)
         reset_filter_btn.pack(side=tk.LEFT, padx=5)
+
+        self.files_listbox.bind('<Double-1>', self.open_selected_csv)
 
     def create_multiselect(self, parent, label):
         frame = ttk.Frame(parent)
@@ -487,4 +490,17 @@ class RealizedGainsViewer:
             all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
             show_graph_window(self.parent_frame, all_data)
         except Exception as e:
-            messagebox.showerror("Erreur graphique", f"Impossible d'afficher le graphe :\n{str(e)}") 
+            messagebox.showerror("Erreur graphique", f"Impossible d'afficher le graphe :\n{str(e)}")
+
+    def open_selected_csv(self, event=None):
+        selection = self.files_listbox.curselection()
+        if not selection:
+            return
+        filename = self.files_listbox.get(selection[0])
+        for path in self.dataframes:
+            if os.path.basename(path) == filename or path == filename:
+                try:
+                    CSVTableViewer(self.parent_frame, path, title=f"Aperçu CSV : {filename}")
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Impossible d'ouvrir le fichier : {e}")
+                break 

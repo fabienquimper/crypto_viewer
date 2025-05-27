@@ -23,7 +23,7 @@ class TaxCalculatorWindow(tk.Toplevel):
         if 'Date' not in self.df.columns:
             raise ValueError("Le fichier doit contenir la colonne 'Date'")
         
-        # Convertir les dates
+        # Convertir les dates et trier chronologiquement
         self.df['Date'] = pd.to_datetime(self.df['Date'], errors='coerce')
         self.df = self.df.dropna(subset=['Date'])
         self.df = self.df.sort_values('Date')
@@ -31,11 +31,25 @@ class TaxCalculatorWindow(tk.Toplevel):
         # Extraire l'année pour le regroupement fiscal
         self.df['Year'] = self.df['Date'].dt.year
         
-        # Identifier les actifs uniques
+        # Séparer les transactions EUR des transactions crypto
+        self.eur_transactions = self.df[
+            ((self.df['Type'] == 'Deposit') & (self.df['Received Currency'] == 'EUR')) |
+            ((self.df['Type'] == 'Buy') & (self.df['Sent Currency'] == 'EUR')) |
+            ((self.df['Type'] == 'Sell') & (self.df['Received Currency'] == 'EUR'))
+        ].copy()
+
+        # Filtrer les transactions crypto (exclure EUR)
+        self.crypto_df = self.df[
+            ~(((self.df['Type'] == 'Deposit') & (self.df['Received Currency'] == 'EUR')) |
+              ((self.df['Type'] == 'Buy') & (self.df['Sent Currency'] == 'EUR')) |
+              ((self.df['Type'] == 'Sell') & (self.df['Received Currency'] == 'EUR')))
+        ].copy()
+        
+        # Identifier les actifs crypto uniques (exclure EUR)
         self.currencies = sorted(set(
-            self.df['Sent Currency'].dropna().unique().tolist() +
-            self.df['Received Currency'].dropna().unique().tolist()
-        ))
+            self.crypto_df['Sent Currency'].dropna().unique().tolist() +
+            self.crypto_df['Received Currency'].dropna().unique().tolist()
+        ) - {'EUR'})
 
     def _setup_ui(self):
         # Frame principal avec panneau divisé
@@ -98,8 +112,10 @@ class TaxCalculatorWindow(tk.Toplevel):
         """Calcule les plus-values et moins-values selon la méthode du PMP"""
         self.portfolio_history = {}
         self.tax_summary = {}
+        self.eur_summary = {}
+        self.eur_curve = []  # Pour la courbe EUR
 
-        # Initialiser l'historique pour chaque devise
+        # Initialiser l'historique pour chaque devise crypto
         for currency in self.currencies:
             self.portfolio_history[currency] = {
                 'stock': 0,
@@ -108,17 +124,68 @@ class TaxCalculatorWindow(tk.Toplevel):
                 'transactions': []
             }
 
-        # Traiter chaque transaction chronologiquement
-        for _, row in self.df.iterrows():
+        # Pour la courbe EUR : cumul dépenses et gains
+        eur_dates = []
+        eur_deposits = []
+        eur_gains = []
+        cum_deposit = 0
+        cum_gain = 0
+
+        # Traiter les transactions EUR séparément
+        for _, row in self.eur_transactions.iterrows():
+            date = row['Date']
+            year = date.year
+
+            if year not in self.eur_summary:
+                self.eur_summary[year] = {
+                    'deposits': 0,
+                    'withdrawals': 0,
+                    'buys': 0,
+                    'sells': 0
+                }
+
+            year_summary = self.eur_summary[year]
+
+            if row['Type'] == 'Deposit':
+                year_summary['deposits'] += float(row['Received Amount'])
+                cum_deposit += float(row['Received Amount'])
+                eur_dates.append(date)
+                eur_deposits.append(cum_deposit)
+                eur_gains.append(cum_gain)
+            elif row['Type'] == 'Buy':
+                year_summary['buys'] += float(row['Sent Amount'])
+                cum_deposit += float(row['Sent Amount'])
+                eur_dates.append(date)
+                eur_deposits.append(cum_deposit)
+                eur_gains.append(cum_gain)
+            elif row['Type'] == 'Sell':
+                year_summary['sells'] += float(row['Received Amount'])
+                cum_gain += float(row['Received Amount'])
+                eur_dates.append(date)
+                eur_deposits.append(cum_deposit)
+                eur_gains.append(cum_gain)
+
+        self.eur_curve = (eur_dates, eur_deposits, eur_gains)
+
+        # Traiter chaque transaction crypto chronologiquement
+        for _, row in self.crypto_df.iterrows():
             date = row['Date']
             year = date.year
 
             # Traiter les sorties (ventes/échanges)
             if pd.notna(row.get('Sent Currency')) and pd.notna(row.get('Sent Amount')):
                 currency = row['Sent Currency']
+                if currency == 'EUR':
+                    continue  # Ignorer les transactions EUR
+
                 amount = float(row['Sent Amount'])
-                price = float(row.get('Sent Price', 0))
                 fees = float(row.get('Fee Amount', 0))
+
+                # Correction : si vente contre EUR, utiliser Received Amount comme prix de vente
+                if row.get('Type') == 'Sell' and row.get('Received Currency') == 'EUR' and pd.notna(row.get('Received Amount')):
+                    price = float(row['Received Amount']) / amount if amount != 0 else 0
+                else:
+                    price = float(row.get('Sent Price', 0))
 
                 if currency in self.portfolio_history:
                     history = self.portfolio_history[currency]
@@ -137,6 +204,7 @@ class TaxCalculatorWindow(tk.Toplevel):
                             'amount': amount,
                             'price': price,
                             'fees': fees,
+                            'pmp': history['pmp'],
                             'pv': pv
                         }
                         history['transactions'].append(transaction)
@@ -161,7 +229,8 @@ class TaxCalculatorWindow(tk.Toplevel):
                             year_summary['currencies'][currency] = {
                                 'pv': 0,
                                 'mv': 0,
-                                'fees': 0
+                                'fees': 0,
+                                'transactions': []
                             }
                         
                         currency_summary = year_summary['currencies'][currency]
@@ -170,13 +239,22 @@ class TaxCalculatorWindow(tk.Toplevel):
                         else:
                             currency_summary['mv'] += abs(pv)
                         currency_summary['fees'] += fees
+                        currency_summary['transactions'].append(transaction)
 
             # Traiter les entrées (achats/échanges)
             if pd.notna(row.get('Received Currency')) and pd.notna(row.get('Received Amount')):
                 currency = row['Received Currency']
+                if currency == 'EUR':
+                    continue  # Ignorer les transactions EUR
+
                 amount = float(row['Received Amount'])
-                price = float(row.get('Received Price', 0))
                 fees = float(row.get('Fee Amount', 0))
+
+                # Correction : si achat contre EUR, utiliser Sent Amount comme prix d'achat
+                if row.get('Type') == 'Buy' and row.get('Sent Currency') == 'EUR' and pd.notna(row.get('Sent Amount')):
+                    price = float(row['Sent Amount']) / amount if amount != 0 else 0
+                else:
+                    price = float(row.get('Received Price', 0))
 
                 if currency in self.portfolio_history:
                     history = self.portfolio_history[currency]
@@ -201,7 +279,8 @@ class TaxCalculatorWindow(tk.Toplevel):
                         'type': 'Buy',
                         'amount': amount,
                         'price': price,
-                        'fees': fees
+                        'fees': fees,
+                        'pmp': new_pmp
                     }
                     history['transactions'].append(transaction)
 
@@ -218,8 +297,21 @@ class TaxCalculatorWindow(tk.Toplevel):
         selected_year = self.year_var.get()
         selected_currency = self.currency_var.get()
 
-        # Afficher le résumé global
-        self.report_text.insert(tk.END, "=== Résumé Fiscal Global ===\n\n")
+        # Afficher le résumé des transactions EUR
+        self.report_text.insert(tk.END, "=== Résumé des Transactions EUR ===\n\n")
+        
+        for year, summary in sorted(self.eur_summary.items()):
+            if selected_year != "Toutes" and str(year) != selected_year:
+                continue
+
+            self.report_text.insert(tk.END, f"\n=== Année {year} ===\n")
+            self.report_text.insert(tk.END, f"  Dépôts: {summary['deposits']:.2f} EUR\n")
+            self.report_text.insert(tk.END, f"  Achats: {summary['buys']:.2f} EUR\n")
+            self.report_text.insert(tk.END, f"  Ventes: {summary['sells']:.2f} EUR\n")
+            self.report_text.insert(tk.END, f"  Net: {summary['deposits'] + summary['sells'] - summary['buys']:.2f} EUR\n")
+
+        # Afficher le résumé fiscal des cryptomonnaies
+        self.report_text.insert(tk.END, "\n=== Résumé Fiscal des Cryptomonnaies ===\n\n")
         
         total_pv = 0
         total_mv = 0
@@ -242,6 +334,15 @@ class TaxCalculatorWindow(tk.Toplevel):
                 
                 net = currency_summary['pv'] - currency_summary['mv']
                 self.report_text.insert(tk.END, f"  Net imposable: {net:.2f} EUR\n")
+
+                # Afficher les détails des transactions
+                self.report_text.insert(tk.END, "\n  Détail des transactions:\n")
+                for tx in currency_summary['transactions']:
+                    self.report_text.insert(tk.END, f"    {tx['date'].strftime('%Y-%m-%d %H:%M:%S')} - ")
+                    self.report_text.insert(tk.END, f"{tx['type']} {tx['amount']:.8f} @ {tx['price']:.2f} EUR")
+                    if 'pv' in tx:
+                        self.report_text.insert(tk.END, f" (PV: {tx['pv']:.2f} EUR)")
+                    self.report_text.insert(tk.END, f" [PMP: {tx['pmp']:.2f} EUR]\n")
 
             year_total = summary['total_pv'] - summary['total_mv']
             self.report_text.insert(tk.END, f"\nTotal {year}:\n")
@@ -326,6 +427,17 @@ class TaxCalculatorWindow(tk.Toplevel):
             self.ax2.set_xticklabels(years)
             self.ax2.legend()
             self.ax2.grid(True)
+
+        # Nouveau graphique 3 : Dépenses et gains EUR
+        if hasattr(self, 'eur_curve') and self.eur_curve[0]:
+            ax3 = self.fig.add_subplot(313)
+            ax3.plot(self.eur_curve[0], self.eur_curve[1], label='Dépenses cumulées (EUR)', color='blue')
+            ax3.plot(self.eur_curve[0], self.eur_curve[2], label='Gains cumulés (EUR)', color='green')
+            ax3.set_title("Dépenses et gains EUR sur la plateforme")
+            ax3.set_xlabel("Date")
+            ax3.set_ylabel("Montant cumulé (EUR)")
+            ax3.legend()
+            ax3.grid(True)
 
         self.fig.tight_layout()
         self.canvas.draw()

@@ -5,6 +5,8 @@ from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
 from transactions_graph import show_graph_window
 from tax_calculator import show_tax_calculator
+from update_csv import CSVTableViewer
+from update_csv import App as UpdateCSVApp
 
 class TransactionsViewer:
     def __init__(self, parent_frame, summary_widget):
@@ -24,6 +26,10 @@ class TransactionsViewer:
         # Boutons de la barre d'outils
         btn_load = ttk.Button(toolbar, text="📂 Ouvrir", command=self.load_csv)
         btn_load.pack(side=tk.LEFT, padx=2)
+
+        # Bouton Update CSV Transaction file
+        btn_update_csv = ttk.Button(toolbar, text="🛠️ Update CSV Transaction file", command=self.open_update_csv_window)
+        btn_update_csv.pack(side=tk.LEFT, padx=5)
 
         # Bouton Show graphes
         btn_show_graph = ttk.Button(toolbar, text="Show graphes", command=self.show_graph_window_action)
@@ -111,6 +117,8 @@ class TransactionsViewer:
 
         validate_btn = ttk.Button(filters_buttons_frame, text="✓ Valider unicité", command=self.validate_transaction_uniqueness)
         validate_btn.pack(side=tk.LEFT, padx=5)
+
+        self.files_listbox.bind('<Double-1>', self.open_selected_csv)
 
     def create_multiselect(self, parent, label):
         frame = ttk.Frame(parent)
@@ -366,8 +374,19 @@ class TransactionsViewer:
             return
 
         try:
-            # Concaténer uniquement les dataframes actifs
-            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            # Utiliser les fichiers enrichis si disponibles
+            dfs = []
+            for filename in self.dataframes:
+                enriched_path = filename.replace('.csv', '_enriched.csv')
+                if os.path.exists(enriched_path):
+                    df = pd.read_csv(enriched_path)
+                else:
+                    df = self.dataframes[filename]
+                dfs.append(df)
+            if not dfs:
+                messagebox.showwarning("Calcul des taxes", "Aucun fichier enrichi trouvé ou sélectionné.")
+                return
+            all_data = pd.concat(dfs, ignore_index=True)
             show_tax_calculator(self.parent_frame, all_data)
         except Exception as e:
             messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des taxes :\n{str(e)}")
@@ -621,4 +640,53 @@ class TransactionsViewer:
             all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
             show_graph_window(self.parent_frame, all_data)
         except Exception as e:
-            messagebox.showerror("Erreur graphique", f"Impossible d'afficher le graphe :\n{str(e)}") 
+            messagebox.showerror("Erreur graphique", f"Impossible d'afficher le graphe :\n{str(e)}")
+
+    def open_selected_csv(self, event=None):
+        selection = self.files_listbox.curselection()
+        if not selection:
+            return
+        filename = self.files_listbox.get(selection[0])
+        # Retrouver le chemin complet du fichier si possible
+        # On suppose que le nom du fichier est unique dans le dossier courant
+        for path in self.dataframes:
+            if os.path.basename(path) == filename or path == filename:
+                try:
+                    CSVTableViewer(self.parent_frame, path, title=f"Aperçu CSV : {filename}")
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Impossible d'ouvrir le fichier : {e}")
+                break 
+
+    def open_update_csv_window(self):
+        # Ouvre la fenêtre d'update/enrichissement CSV pour le(s) fichier(s) chargé(s)
+        loaded_files = list(self.dataframes.keys())
+        if not loaded_files:
+            messagebox.showwarning("Aucun fichier", "Veuillez d'abord charger un ou plusieurs fichiers CSV.")
+            return
+        if len(loaded_files) == 1:
+            # Un seul fichier chargé, update direct
+            path = loaded_files[0]
+            win = tk.Toplevel(self.parent_frame)
+            win.title(f"Update CSV : {os.path.basename(path)}")
+            UpdateCSVApp(win)
+            # (optionnel: pré-remplir le chemin du fichier dans l'App)
+        else:
+            # Plusieurs fichiers chargés, proposer de merger
+            answer = messagebox.askyesno(
+                "Fusionner les fichiers ?",
+                "Plusieurs fichiers sont chargés. Voulez-vous les fusionner en un seul fichier temporaire pour l'update ? (Oui = fusionner et update, Non = annuler)"
+            )
+            if answer:
+                # Fusionner tous les fichiers chargés
+                try:
+                    merged_df = pd.concat([self.dataframes[f] for f in loaded_files], ignore_index=True)
+                    merged_path = os.path.join(self.current_directory, "merged_transactions.csv")
+                    merged_df.to_csv(merged_path, index=False)
+                    win = tk.Toplevel(self.parent_frame)
+                    win.title("Update CSV : merged_transactions.csv")
+                    UpdateCSVApp(win)
+                    # (optionnel: pré-remplir le chemin du fichier dans l'App)
+                except Exception as e:
+                    messagebox.showerror("Erreur de fusion", f"Impossible de fusionner les fichiers : {e}")
+            else:
+                messagebox.showinfo("Annulé", "Aucune mise à jour n'a été lancée.") 
