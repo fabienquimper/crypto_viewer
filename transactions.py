@@ -3,6 +3,8 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from transactions_graph import show_graph_window
+from tax_calculator import show_tax_calculator
 
 class TransactionsViewer:
     def __init__(self, parent_frame, summary_widget):
@@ -22,6 +24,10 @@ class TransactionsViewer:
         # Boutons de la barre d'outils
         btn_load = ttk.Button(toolbar, text="📂 Ouvrir", command=self.load_csv)
         btn_load.pack(side=tk.LEFT, padx=2)
+
+        # Bouton Show graphes
+        btn_show_graph = ttk.Button(toolbar, text="Show graphes", command=self.show_graph_window_action)
+        btn_show_graph.pack(side=tk.LEFT, padx=5)
 
         # Chemin actuel
         self.path_var = tk.StringVar(value=self.current_directory)
@@ -354,9 +360,17 @@ class TransactionsViewer:
             messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des récompenses :\n{str(e)}")
 
     def calculate_tax(self):
-        """Calcule les taxes (à implémenter)"""
-        self.append_to_summary("\n=== Calcul des Taxes ===\n")
-        self.append_to_summary("Cette fonctionnalité sera implémentée prochainement.\n")
+        """Calcule les taxes en utilisant le calculateur fiscal"""
+        if not self.dataframes:
+            messagebox.showwarning("Calcul des taxes", "Aucune donnée à analyser. Veuillez d'abord charger des fichiers CSV.")
+            return
+
+        try:
+            # Concaténer uniquement les dataframes actifs
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            show_tax_calculator(self.parent_frame, all_data)
+        except Exception as e:
+            messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des taxes :\n{str(e)}")
 
     def append_to_summary(self, text):
         """Ajoute du texte à la zone de résumé sans effacer le contenu existant"""
@@ -599,4 +613,12 @@ class TransactionsViewer:
         for filename in self.dataframes.keys():
             if filename in self.file_checkboxes:
                 self.file_checkboxes[filename].set(False)
-        self.update_summary() 
+        self.update_summary()
+
+    def show_graph_window_action(self):
+        """Ouvre la fenêtre de graphes dynamiques pour les données chargées"""
+        try:
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            show_graph_window(self.parent_frame, all_data)
+        except Exception as e:
+            messagebox.showerror("Erreur graphique", f"Impossible d'afficher le graphe :\n{str(e)}") 

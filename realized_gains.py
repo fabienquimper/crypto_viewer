@@ -3,6 +3,7 @@ import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
+from realized_gains_graph import show_graph_window
 
 class RealizedGainsViewer:
     def __init__(self, parent_frame, summary_widget):
@@ -32,6 +33,14 @@ class RealizedGainsViewer:
         # Bouton de calcul des gains
         btn_calculate = ttk.Button(toolbar, text="Calculate Realized Gains", command=self.calculate_realized_gains)
         btn_calculate.pack(side=tk.LEFT, padx=5)
+
+        # Nouveau bouton pour le calcul mensuel
+        btn_calculate_monthly = ttk.Button(toolbar, text="Calculate Monthly Realized Gains", command=self.calculate_monthly_realized_gains)
+        btn_calculate_monthly.pack(side=tk.LEFT, padx=5)
+
+        # Bouton Show graphes
+        btn_show_graph = ttk.Button(toolbar, text="Show graphes", command=self.show_graph_window_action)
+        btn_show_graph.pack(side=tk.LEFT, padx=5)
 
         # Bouton d'export des gains
         btn_export = ttk.Button(toolbar, text="📤 Export Realized Gains CSV", command=self.export_realized_gains)
@@ -311,6 +320,109 @@ class RealizedGainsViewer:
         except Exception as e:
             messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul des gains :\n{str(e)}")
 
+    def calculate_monthly_realized_gains(self):
+        """Calcule les gains réalisés totaux, par année et par mois (année-mois basée sur 'Sold')"""
+        if not self.dataframes:
+            messagebox.showwarning("Calcul des gains", "Aucune donnée à analyser. Veuillez d'abord charger des fichiers CSV.")
+            return
+
+        try:
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            # Convertir les colonnes de dates
+            if 'Acquired' in all_data.columns:
+                all_data['Acquired'] = pd.to_datetime(all_data['Acquired'], errors='coerce')
+            if 'Sold' in all_data.columns:
+                all_data['Sold'] = pd.to_datetime(all_data['Sold'], errors='coerce')
+                all_data['Year'] = all_data['Sold'].dt.year
+                all_data['YearMonth'] = all_data['Sold'].dt.strftime('%Y-%m')
+
+            # Convertir les colonnes numériques
+            numeric_columns = ['Currency amount', 'Proceeds (EUR)', 'Cost basis (EUR)', 'Gains (EUR)', 'Holding period (Days)']
+            for col in numeric_columns:
+                if col in all_data.columns:
+                    all_data[col] = pd.to_numeric(all_data[col], errors='coerce')
+
+            self.summary.delete("1.0", tk.END)
+            self.summary.insert(tk.END, "=== Gains Réalisés Globaux ===\n\n")
+
+            # Totaux globaux par devise
+            gains_by_currency = all_data.groupby('Currency name').agg({
+                'Currency amount': 'sum',
+                'Proceeds (EUR)': 'sum',
+                'Cost basis (EUR)': 'sum',
+                'Gains (EUR)': 'sum'
+            }).round(8)
+            for currency, row in gains_by_currency.iterrows():
+                self.summary.insert(tk.END, f"{currency}:\n")
+                self.summary.insert(tk.END, f"  Montant: {row['Currency amount']:.8f}\n")
+                self.summary.insert(tk.END, f"  Proceeds: {row['Proceeds (EUR)']:.2f} EUR\n")
+                self.summary.insert(tk.END, f"  Cost Basis: {row['Cost basis (EUR)']:.2f} EUR\n")
+                self.summary.insert(tk.END, f"  Gains: {row['Gains (EUR)']:.2f} EUR\n\n")
+
+            # Totaux globaux
+            total_proceeds = all_data['Proceeds (EUR)'].sum()
+            total_cost_basis = all_data['Cost basis (EUR)'].sum()
+            total_gains = all_data['Gains (EUR)'].sum()
+            self.summary.insert(tk.END, "=== Totaux Globaux ===\n")
+            self.summary.insert(tk.END, f"Total Proceeds: {total_proceeds:.2f} EUR\n")
+            self.summary.insert(tk.END, f"Total Cost Basis: {total_cost_basis:.2f} EUR\n")
+            self.summary.insert(tk.END, f"Total Gains: {total_gains:.2f} EUR\n")
+
+            # Totaux par année
+            if 'Year' in all_data.columns:
+                self.summary.insert(tk.END, "\n=== Gains par Année (année de cession) ===\n\n")
+                for year in sorted(all_data['Year'].dropna().unique()):
+                    year_data = all_data[all_data['Year'] == year]
+                    year_gains = year_data.groupby('Currency name').agg({
+                        'Currency amount': 'sum',
+                        'Proceeds (EUR)': 'sum',
+                        'Cost basis (EUR)': 'sum',
+                        'Gains (EUR)': 'sum'
+                    }).round(8)
+                    self.summary.insert(tk.END, f"\n=== {int(year)} ===\n")
+                    for currency, row in year_gains.iterrows():
+                        self.summary.insert(tk.END, f"{currency}:\n")
+                        self.summary.insert(tk.END, f"  Montant: {row['Currency amount']:.8f}\n")
+                        self.summary.insert(tk.END, f"  Proceeds: {row['Proceeds (EUR)']:.2f} EUR\n")
+                        self.summary.insert(tk.END, f"  Cost Basis: {row['Cost basis (EUR)']:.2f} EUR\n")
+                        self.summary.insert(tk.END, f"  Gains: {row['Gains (EUR)']:.2f} EUR\n\n")
+                    year_total_proceeds = year_data['Proceeds (EUR)'].sum()
+                    year_total_cost_basis = year_data['Cost basis (EUR)'].sum()
+                    year_total_gains = year_data['Gains (EUR)'].sum()
+                    self.summary.insert(tk.END, f"Totaux {int(year)}:\n")
+                    self.summary.insert(tk.END, f"  Proceeds: {year_total_proceeds:.2f} EUR\n")
+                    self.summary.insert(tk.END, f"  Cost Basis: {year_total_cost_basis:.2f} EUR\n")
+                    self.summary.insert(tk.END, f"  Gains: {year_total_gains:.2f} EUR\n")
+
+            # Totaux par mois (année-mois)
+            if 'YearMonth' in all_data.columns:
+                self.summary.insert(tk.END, "\n=== Gains par Mois (année-mois de cession) ===\n\n")
+                for ym in sorted(all_data['YearMonth'].dropna().unique()):
+                    month_data = all_data[all_data['YearMonth'] == ym]
+                    month_gains = month_data.groupby('Currency name').agg({
+                        'Currency amount': 'sum',
+                        'Proceeds (EUR)': 'sum',
+                        'Cost basis (EUR)': 'sum',
+                        'Gains (EUR)': 'sum'
+                    }).round(8)
+                    self.summary.insert(tk.END, f"\n=== {ym} ===\n")
+                    for currency, row in month_gains.iterrows():
+                        self.summary.insert(tk.END, f"{currency}:\n")
+                        self.summary.insert(tk.END, f"  Montant: {row['Currency amount']:.8f}\n")
+                        self.summary.insert(tk.END, f"  Proceeds: {row['Proceeds (EUR)']:.2f} EUR\n")
+                        self.summary.insert(tk.END, f"  Cost Basis: {row['Cost basis (EUR)']:.2f} EUR\n")
+                        self.summary.insert(tk.END, f"  Gains: {row['Gains (EUR)']:.2f} EUR\n\n")
+                    month_total_proceeds = month_data['Proceeds (EUR)'].sum()
+                    month_total_cost_basis = month_data['Cost basis (EUR)'].sum()
+                    month_total_gains = month_data['Gains (EUR)'].sum()
+                    self.summary.insert(tk.END, f"Totaux {ym}:\n")
+                    self.summary.insert(tk.END, f"  Proceeds: {month_total_proceeds:.2f} EUR\n")
+                    self.summary.insert(tk.END, f"  Cost Basis: {month_total_cost_basis:.2f} EUR\n")
+                    self.summary.insert(tk.END, f"  Gains: {month_total_gains:.2f} EUR\n")
+
+        except Exception as e:
+            messagebox.showerror("Erreur de calcul", f"Une erreur est survenue lors du calcul mensuel des gains :\n{str(e)}")
+
     def export_realized_gains(self):
         """Exporte les données de gains réalisés vers un fichier CSV trié par date d'acquisition"""
         if not self.dataframes:
@@ -367,4 +479,12 @@ class RealizedGainsViewer:
         for filename in self.dataframes.keys():
             if filename in self.file_checkboxes:
                 self.file_checkboxes[filename].set(False)
-        self.update_summary() 
+        self.update_summary()
+
+    def show_graph_window_action(self):
+        """Ouvre la fenêtre de graphes dynamiques pour les données chargées"""
+        try:
+            all_data = pd.concat(self.get_active_dataframes().values(), ignore_index=True)
+            show_graph_window(self.parent_frame, all_data)
+        except Exception as e:
+            messagebox.showerror("Erreur graphique", f"Impossible d'afficher le graphe :\n{str(e)}") 
