@@ -27,6 +27,31 @@ def get_binance_price(symbol, timestamp_ms):
     except Exception as e:
         return None
 
+# Nouvelle fonction utilitaire pour obtenir un prix EUR via intermédiaire USDT
+def get_price_eur_with_intermediate(symbol, timestamp_ms, log_callback=None):
+    # symbol: ex 'FET'
+    # 1. Essayer symbol/EUR direct
+    pair_direct = symbol + 'EUR'
+    price_direct = get_binance_price(pair_direct, timestamp_ms)
+    if price_direct:
+        if log_callback:
+            log_callback(f"{symbol}/EUR direct: {price_direct}")
+        return price_direct
+    # 2. Essayer symbol/USDT et EUR/USDT
+    pair_usdt = symbol + 'USDT'
+    price_usdt = get_binance_price(pair_usdt, timestamp_ms)
+    price_eur_usdt = get_binance_price('EURUSDT', timestamp_ms)
+    if price_usdt and price_eur_usdt:
+        # 1 USDT = 1/price_eur_usdt EUR
+        price_eur = price_usdt * (1/price_eur_usdt)
+        if log_callback:
+            log_callback(f"{symbol}/USDT: {price_usdt}, EUR/USDT: {price_eur_usdt}, {symbol}/EUR via USDT: {price_eur}")
+        return price_eur
+    # 3. Essayer symbol/BTC puis BTC/EUR (optionnel, non implémenté ici)
+    if log_callback:
+        log_callback(f"Impossible de trouver le prix EUR pour {symbol} à {timestamp_ms}")
+    return None
+
 def enrich_csv_with_eur_prices(filepath, requests_per_minute, progress_callback, log_callback, table_viewer=None, stop_flag=None, refresh_every=200, fast_mode=False):
     base, ext = os.path.splitext(filepath)
     output_path = f"{base}_enriched{ext}"
@@ -156,6 +181,70 @@ def enrich_csv_with_eur_prices(filepath, requests_per_minute, progress_callback,
         log_callback(f"Fichier enrichi sauvegardé : {output_path}")
     return df
 
+# Fonction de correction CSV
+def correct_csv_prices(filepath, log_callback, table_viewer=None):
+    base, ext = os.path.splitext(filepath)
+    output_path = f"{base}_corrected{ext}"
+    df = pd.read_csv(filepath)
+    # Trier chronologiquement si la colonne 'Date' existe
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        df = df.sort_values('Date').reset_index(drop=True)
+    total_rows = len(df)
+    for i, row in df.iterrows():
+        date_str = row.get('Date') or row.get('datetime')
+        if not date_str:
+            continue
+        try:
+            dt = pd.to_datetime(date_str)
+        except:
+            dt = datetime.fromisoformat(date_str)
+        dt = pytz.timezone('Europe/Paris').localize(dt) if dt.tzinfo is None else dt
+        timestamp_ms = int(dt.timestamp() * 1000)
+        # Sent
+        sent_cur = str(row.get('Sent Currency', '')).upper()
+        sent_amt = row.get('Sent Amount')
+        sent_price_eur = row.get('Sent Price EUR')
+        if (sent_cur and sent_cur != 'EUR' and pd.notna(sent_amt)) and (pd.isna(sent_price_eur) or sent_price_eur == '' or sent_price_eur == 0):
+            price = get_price_eur_with_intermediate(sent_cur, timestamp_ms, log_callback)
+            if price:
+                df.at[i, 'Sent Price EUR'] = price
+                df.at[i, 'Sent Value EUR'] = float(sent_amt) * price
+        # Received
+        recv_cur = str(row.get('Received Currency', '')).upper()
+        recv_amt = row.get('Received Amount')
+        recv_price_eur = row.get('Received Price EUR')
+        if (recv_cur and recv_cur != 'EUR' and pd.notna(recv_amt)) and (pd.isna(recv_price_eur) or recv_price_eur == '' or recv_price_eur == 0):
+            price = get_price_eur_with_intermediate(recv_cur, timestamp_ms, log_callback)
+            if price:
+                df.at[i, 'Received Price EUR'] = price
+                df.at[i, 'Received Value EUR'] = float(recv_amt) * price
+        # Mise à jour visuelle de la ligne courante dans le tableau (Treeview)
+        if table_viewer is not None and hasattr(table_viewer, 'tree'):
+            try:
+                iid = table_viewer.tree.get_children()[i]
+                values = [df.at[i, col] for col in df.columns]
+                table_viewer.tree.item(iid, values=values)
+                table_viewer.tree.selection_remove(table_viewer.tree.selection())
+                table_viewer.tree.see(iid)
+                table_viewer.tree.selection_set(iid)
+            except Exception:
+                pass
+        log_callback(f"Correction {i+1}/{total_rows} : {date_str} | Sent {sent_cur} | Received {recv_cur}")
+    # Sauvegarde finale
+    df.to_csv(output_path, index=False)
+    if table_viewer is not None and hasattr(table_viewer, 'tree'):
+        try:
+            table_viewer.df = pd.read_csv(output_path)
+            table_viewer.tree.delete(*table_viewer.tree.get_children())
+            for _, row2 in table_viewer.df.iterrows():
+                values = [row2[col] for col in table_viewer.df.columns]
+                table_viewer.tree.insert("", "end", values=values)
+        except Exception:
+            pass
+    log_callback(f"Fichier corrigé sauvegardé : {output_path}")
+    return df
+
 # Interface graphique adaptée
 class App:
     def __init__(self, root):
@@ -179,6 +268,8 @@ class App:
         self.chk_fast.pack(pady=2)
         self.btn_start = tk.Button(root, text="Démarrer l'enrichissement", command=self.run_processing)
         self.btn_start.pack(pady=10)
+        self.btn_correct = tk.Button(root, text="Correct CSV", command=self.run_correction)
+        self.btn_correct.pack(pady=5)
         tk.Button(root, text="Aperçu CSV", command=self.show_csv_viewer).pack(pady=5)
         self.progress = Progressbar(root, orient="horizontal", mode="determinate", length=300)
         self.progress.pack(pady=10)
@@ -269,6 +360,25 @@ class App:
             self.root.after(0, _finish)
         self.thread = threading.Thread(target=thread_target, daemon=True)
         self.thread.start()
+
+    def run_correction(self):
+        if not self.filepath:
+            messagebox.showwarning("Fichier manquant", "Veuillez sélectionner un fichier CSV.")
+            return
+        self.log_message("Début de la correction des prix EUR...")
+        self.btn_correct.config(state=tk.DISABLED)
+        def log_callback(msg):
+            self.log_message(msg)
+        def thread_target():
+            correct_csv_prices(
+                self.filepath.replace('.csv', '_enriched.csv'),
+                log_callback,
+                table_viewer=self.csv_viewer
+            )
+            def _finish():
+                self.btn_correct.config(state=tk.NORMAL)
+            self.root.after(0, _finish)
+        threading.Thread(target=thread_target, daemon=True).start()
 
 class CSVTableViewer(tk.Toplevel):
     """
